@@ -1,6 +1,6 @@
-requests
 aiogram
 fastapi
 uvicorn
 python-dotenv
 openai
+requests
