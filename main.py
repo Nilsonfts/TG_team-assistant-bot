@@ -9,12 +9,8 @@ from dotenv import load_dotenv
 import requests
 import openai
 
-# === Загрузка переменных окружения ===
+# --- Load environment variables ---
 load_dotenv()
-
-# Диагностика: распечатать все переменные среды
-print("ВСЯ СРЕДА:", os.environ)
-print("CHAT_ID:", os.getenv("CHAT_ID"))
 
 def get_env_str(name, required=True, default=None):
     val = os.getenv(name)
@@ -27,9 +23,9 @@ def get_env_str(name, required=True, default=None):
 
 BOT_TOKEN = get_env_str("BOT_TOKEN")
 OPENAI_API_KEY = get_env_str("OPENAI_API_KEY")
-CHAT_ID = get_env_str("CHAT_ID")           # Оставляем как строку!
-THREAD_ID = get_env_str("THREAD_ID")        # Оставляем как строку!
-OWNER_ID = 196614680                       # Замени на свой user_id если нужно
+CHAT_ID = get_env_str("CHAT_ID")
+THREAD_ID = get_env_str("THREAD_ID", required=False, default=None)
+OWNER_ID = int(get_env_str("OWNER_ID", required=False, default="196614680"))  # Можно переопределить через переменную
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -45,16 +41,19 @@ def get_tasks_list(limit=5):
         "order": {"DEADLINE": "asc"},
         "filter": {}
     }
-    resp = requests.get(url, params=params)
-    data = resp.json()
-    if "result" in data and "tasks" in data["result"]:
-        return data["result"]["tasks"][:limit]
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+        if "result" in data and "tasks" in data["result"]:
+            return data["result"]["tasks"][:limit]
+    except Exception as e:
+        print("Ошибка при получении задач Bitrix24:", e)
     return []
 
-def is_private_owner(message: types.Message):
-    return message.chat.type == "private" and message.from_user.id == OWNER_ID
+def is_private(message: types.Message):
+    return message.chat.type == "private"
 
-def is_work_thread(message: types.Message):
+def is_group_thread(message: types.Message):
     try:
         return (
             message.chat.type in ("supergroup", "group")
@@ -64,9 +63,17 @@ def is_work_thread(message: types.Message):
     except Exception:
         return False
 
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        f"Привет, {message.from_user.first_name}!\n"
+        f"Твой user ID: <code>{message.from_user.id}</code>\n"
+        f"Текущий chat ID: <code>{message.chat.id}</code>", parse_mode=ParseMode.HTML
+    )
+
 @dp.message(Command("b24tasks"))
 async def show_b24tasks(message: types.Message):
-    if not (is_private_owner(message) or is_work_thread(message)):
+    if not (is_private(message) or is_group_thread(message)):
         return
     tasks = get_tasks_list(limit=5)
     if not tasks:
@@ -85,7 +92,7 @@ async def show_b24tasks(message: types.Message):
 
 @dp.message(Command("gpt"))
 async def gpt_answer(message: types.Message):
-    if not (is_private_owner(message) or is_work_thread(message)):
+    if not (is_private(message) or is_group_thread(message)):
         return
     user_text = message.text.replace("/gpt", "", 1).strip()
     if not user_text:
@@ -95,7 +102,7 @@ async def gpt_answer(message: types.Message):
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "Ты дружелюбный Telegram-ассистент, отвечай кратко и по делу."},
+                {"role": "system", "content": "Ты — дружелюбный Telegram-ассистент, отвечай кратко и по делу."},
                 {"role": "user", "content": user_text}
             ],
             max_tokens=500,
@@ -108,8 +115,8 @@ async def gpt_answer(message: types.Message):
 
 @dp.message()
 async def fallback(message: types.Message):
-    if is_private_owner(message) or is_work_thread(message):
-        await message.reply("Если хочешь спросить у GPT, используй /gpt [текст]")
+    if is_private(message) or is_group_thread(message):
+        await message.reply("Используй /gpt [текст], чтобы спросить у GPT\nили /b24tasks — чтобы получить задачи из Bitrix24.")
 
 @app.post("/bitrix-webhook")
 async def bitrix_webhook(request: Request):
