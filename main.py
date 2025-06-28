@@ -1,5 +1,6 @@
 import os
 import asyncio
+import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -7,7 +8,7 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import openai
 
-# Загрузка переменных окружения
+# --- Загрузка переменных окружения ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID"))
@@ -15,11 +16,45 @@ THREAD_ID = os.getenv("THREAD_ID")
 THREAD_ID = int(THREAD_ID) if THREAD_ID and THREAD_ID.isdigit() else None
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Инициализация клиентов
+BITRIX_WEBHOOK_URL = "https://nebar.bitrix24.ru/rest/1856/5damz451340uegoc/"
+
+# --- Инициализация клиентов ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+# --- Bitrix24: Функция для получения задач ---
+def get_tasks_list(limit=5):
+    url = BITRIX_WEBHOOK_URL + "tasks.task.list"
+    params = {
+        "select": ["ID", "TITLE", "DESCRIPTION", "RESPONSIBLE_NAME", "CREATED_BY", "DEADLINE"],
+        "order": {"DEADLINE": "asc"},
+        "filter": {}  # Можно добавить фильтры, например, по ответственному
+    }
+    resp = requests.get(url, params=params)
+    data = resp.json()
+    if "result" in data and "tasks" in data["result"]:
+        return data["result"]["tasks"][:limit]
+    return []
+
+# --- Команда /b24tasks ---
+@dp.message(Command("b24tasks"))
+async def show_b24tasks(message: types.Message):
+    tasks = get_tasks_list(limit=5)
+    if not tasks:
+        await message.reply("Нет задач в Битрикс24.")
+        return
+    msg = "<b>Топ задач из Битрикс24:</b>\n"
+    for task in tasks:
+        t = task["task"]
+        title = t.get("title", "Без названия")
+        tid = t.get("id", "-")
+        responsible = t.get("responsible_name", "-")
+        deadline = t.get("deadline", "не указан")
+        msg += f"\n<b>{title}</b>\nID: <code>{tid}</code>\nОтветственный: {responsible}\nДедлайн: {deadline}\n"
+        msg += f'<a href="https://nebar.bitrix24.ru/company/personal/user/{t.get("created_by", "")}/tasks/task/view/{tid}/">Открыть задачу</a>\n'
+    await message.reply(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 # --- GPT ассистент ---
 @dp.message(Command("start"))
@@ -56,7 +91,6 @@ async def fallback(message: types.Message):
 async def bitrix_webhook(request: Request):
     try:
         data = await request.json()
-        # Поддержка разных форматов payload от Битрикса
         task = (
             data.get("task") or
             data.get("data", {}).get("TASK") or
