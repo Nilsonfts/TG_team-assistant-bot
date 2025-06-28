@@ -9,8 +9,12 @@ from dotenv import load_dotenv
 import requests
 import openai
 
-# --- Загружаем переменные среды ---
+# === Загрузка переменных окружения ===
 load_dotenv()
+
+# Диагностика: распечатать все переменные среды
+print("ВСЯ СРЕДА:", os.environ)
+print("CHAT_ID:", os.getenv("CHAT_ID"))
 
 def get_env_str(name, required=True, default=None):
     val = os.getenv(name)
@@ -21,11 +25,10 @@ def get_env_str(name, required=True, default=None):
         return default
     return val
 
-# Получаем переменные окружения как строки
 BOT_TOKEN = get_env_str("BOT_TOKEN")
 OPENAI_API_KEY = get_env_str("OPENAI_API_KEY")
 CHAT_ID = get_env_str("CHAT_ID")           # Оставляем как строку!
-THREAD_ID = get_env_str("THREAD_ID")        # Тоже строка (можно int, если нужно)
+THREAD_ID = get_env_str("THREAD_ID")        # Оставляем как строку!
 OWNER_ID = 196614680                       # Замени на свой user_id если нужно
 
 bot = Bot(token=BOT_TOKEN)
