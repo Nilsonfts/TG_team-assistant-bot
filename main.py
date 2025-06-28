@@ -9,14 +9,29 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import openai
 
-# === Конфиг ===
+# === Загрузка переменных окружения ===
 load_dotenv()
+
+def get_env_int(name, required=True, default=None):
+    val = os.getenv(name)
+    if val is None or val == "":
+        if required:
+            print(f"Environment variable {name} is not set! Please set it in your Railway/Heroku/.env")
+            sys.exit(1)
+        return default
+    try:
+        return int(val)
+    except Exception:
+        print(f"Environment variable {name} must be integer-like, got: {val}")
+        sys.exit(1)
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-BITRIX_WEBHOOK_URL = "https://nebar.bitrix24.ru/rest/1856/5damz451340uegoc/"
-GROUP_ID = int(os.getenv("CHAT_ID"))      # ID чата/группы для задач из Bitrix24
-THREAD_ID = int(os.getenv("THREAD_ID"))   # ID ветки (топика)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OWNER_ID = 196614680                      # твой Telegram user_id
+BITRIX_WEBHOOK_URL = "https://nebar.bitrix24.ru/rest/1856/5damz451340uegoc/"
+
+GROUP_ID = get_env_int("CHAT_ID", required=True)      # ID чата/группы для задач из Bitrix24 (например, -1002565046530)
+THREAD_ID = get_env_int("THREAD_ID", required=True)   # ID ветки (топика) внутри группы
+OWNER_ID = 196614680                                  # твой user_id (только ты можешь использовать бота в личке)
 
 # --- Инициализация клиентов ---
 bot = Bot(token=BOT_TOKEN)
@@ -38,22 +53,23 @@ def get_tasks_list(limit=5):
         return data["result"]["tasks"][:limit]
     return []
 
-# --- Проверки ---
 def is_private_owner(message: types.Message):
+    # В личке и именно твой user_id
     return message.chat.type == "private" and message.from_user.id == OWNER_ID
 
 def is_work_thread(message: types.Message):
+    # В нужной группе, нужной ветке (топике)
     return (
         message.chat.type in ("supergroup", "group")
         and message.chat.id == GROUP_ID
-        and (message.message_thread_id == THREAD_ID if message.message_thread_id else False)
+        and message.message_thread_id == THREAD_ID
     )
 
 # --- Команда /b24tasks ---
 @dp.message(Command("b24tasks"))
 async def show_b24tasks(message: types.Message):
     if not (is_private_owner(message) or is_work_thread(message)):
-        return
+        return  # Игнорируем все остальные чаты/ветки/пользователей
     tasks = get_tasks_list(limit=5)
     if not tasks:
         await message.reply("Нет задач в Битрикс24.")
@@ -73,7 +89,7 @@ async def show_b24tasks(message: types.Message):
 @dp.message(Command("gpt"))
 async def gpt_answer(message: types.Message):
     if not (is_private_owner(message) or is_work_thread(message)):
-        return
+        return  # Игнорируем все остальные чаты/ветки/пользователей
     user_text = message.text.replace("/gpt", "", 1).strip()
     if not user_text:
         await message.reply("Пожалуйста, напиши свой вопрос после команды /gpt")
@@ -93,11 +109,12 @@ async def gpt_answer(message: types.Message):
     except Exception as e:
         await message.reply(f"Ошибка при обращении к AI: {e}")
 
-# --- Общий фоллбек ---
+# --- Ответ на все остальные сообщения ---
 @dp.message()
 async def fallback(message: types.Message):
     if is_private_owner(message) or is_work_thread(message):
         await message.reply("Если хочешь спросить у GPT, используй /gpt [текст]")
+    # иначе — игнорируем
 
 # --- Webhook для Bitrix24 (пушит задачи в группу/топик) ---
 @app.post("/bitrix-webhook")
