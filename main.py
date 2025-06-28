@@ -21,18 +21,11 @@ def get_env_str(name, required=True, default=None):
         return default
     return val
 
-def get_env_int(name, required=True, default=None):
-    val = get_env_str(name, required, default)
-    try:
-        return int(val)
-    except Exception:
-        print(f"Environment variable {name} must be integer-like, got: {val}")
-        sys.exit(1)
-
+# Получаем переменные окружения как строки
 BOT_TOKEN = get_env_str("BOT_TOKEN")
 OPENAI_API_KEY = get_env_str("OPENAI_API_KEY")
-CHAT_ID = get_env_int("CHAT_ID")           # ОБЯЗАТЕЛЬНО с минусом для супергрупп!
-THREAD_ID = get_env_int("THREAD_ID")
+CHAT_ID = get_env_str("CHAT_ID")           # Оставляем как строку!
+THREAD_ID = get_env_str("THREAD_ID")        # Тоже строка (можно int, если нужно)
 OWNER_ID = 196614680                       # Замени на свой user_id если нужно
 
 bot = Bot(token=BOT_TOKEN)
@@ -59,11 +52,14 @@ def is_private_owner(message: types.Message):
     return message.chat.type == "private" and message.from_user.id == OWNER_ID
 
 def is_work_thread(message: types.Message):
-    return (
-        message.chat.type in ("supergroup", "group")
-        and message.chat.id == CHAT_ID
-        and message.message_thread_id == THREAD_ID
-    )
+    try:
+        return (
+            message.chat.type in ("supergroup", "group")
+            and str(message.chat.id) == str(CHAT_ID)
+            and (not THREAD_ID or str(message.message_thread_id) == str(THREAD_ID))
+        )
+    except Exception:
+        return False
 
 @dp.message(Command("b24tasks"))
 async def show_b24tasks(message: types.Message):
@@ -153,13 +149,13 @@ async def bitrix_webhook(request: Request):
             f'<a href="{link}">Открыть задачу в Битрикс24</a>'
         )
         send_kwargs = dict(
-            chat_id=CHAT_ID,
+            chat_id=int(CHAT_ID),
             text=message_text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
         if THREAD_ID:
-            send_kwargs["message_thread_id"] = THREAD_ID
+            send_kwargs["message_thread_id"] = int(THREAD_ID)
         asyncio.create_task(bot.send_message(**send_kwargs))
         return {"ok": True}
     except Exception as e:
