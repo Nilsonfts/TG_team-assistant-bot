@@ -14,7 +14,7 @@ if not BOT_TOKEN:
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY not found in .env")
 
-openai.api_key = OPENAI_API_KEY
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -33,8 +33,8 @@ async def gpt_answer(message: types.Message):
     await message.answer("Секунду, думаю...")
 
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # Или другой, если у тебя другой API/ключ
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Ты дружелюбный Telegram-ассистент."},
                 {"role": "user", "content": user_text}
@@ -42,7 +42,7 @@ async def gpt_answer(message: types.Message):
             max_tokens=400,
             temperature=0.7,
         )
-        answer = response['choices'][0]['message']['content']
+        answer = response.choices[0].message.content
         await message.answer(answer)
     except Exception as e:
         await message.answer(f"Ошибка при обращении к AI: {e}")
