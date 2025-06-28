@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import requests
 from aiogram import Bot, Dispatcher, types
@@ -8,15 +9,14 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 import openai
 
-# --- Загрузка переменных окружения ---
+# === Конфиг ===
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID"))
-THREAD_ID = os.getenv("THREAD_ID")
-THREAD_ID = int(THREAD_ID) if THREAD_ID and THREAD_ID.isdigit() else None
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 BITRIX_WEBHOOK_URL = "https://nebar.bitrix24.ru/rest/1856/5damz451340uegoc/"
+GROUP_ID = int(os.getenv("CHAT_ID"))      # ID чата/группы для задач из Bitrix24
+THREAD_ID = int(os.getenv("THREAD_ID"))   # ID ветки (топика)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OWNER_ID = 196614680                      # твой Telegram user_id
 
 # --- Инициализация клиентов ---
 bot = Bot(token=BOT_TOKEN)
@@ -24,13 +24,13 @@ dp = Dispatcher()
 app = FastAPI()
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Bitrix24: Функция для получения задач ---
+# --- Bitrix24: Получить задачи ---
 def get_tasks_list(limit=5):
     url = BITRIX_WEBHOOK_URL + "tasks.task.list"
     params = {
         "select": ["ID", "TITLE", "DESCRIPTION", "RESPONSIBLE_NAME", "CREATED_BY", "DEADLINE"],
         "order": {"DEADLINE": "asc"},
-        "filter": {}  # Можно добавить фильтры, например, по ответственному
+        "filter": {}
     }
     resp = requests.get(url, params=params)
     data = resp.json()
@@ -38,9 +38,22 @@ def get_tasks_list(limit=5):
         return data["result"]["tasks"][:limit]
     return []
 
+# --- Проверки ---
+def is_private_owner(message: types.Message):
+    return message.chat.type == "private" and message.from_user.id == OWNER_ID
+
+def is_work_thread(message: types.Message):
+    return (
+        message.chat.type in ("supergroup", "group")
+        and message.chat.id == GROUP_ID
+        and (message.message_thread_id == THREAD_ID if message.message_thread_id else False)
+    )
+
 # --- Команда /b24tasks ---
 @dp.message(Command("b24tasks"))
 async def show_b24tasks(message: types.Message):
+    if not (is_private_owner(message) or is_work_thread(message)):
+        return
     tasks = get_tasks_list(limit=5)
     if not tasks:
         await message.reply("Нет задач в Битрикс24.")
@@ -57,12 +70,10 @@ async def show_b24tasks(message: types.Message):
     await message.reply(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 # --- GPT ассистент ---
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer("Привет! Я ассистент. Используй /gpt [текст], чтобы поговорить с GPT. Или просто напиши мне.")
-
 @dp.message(Command("gpt"))
 async def gpt_answer(message: types.Message):
+    if not (is_private_owner(message) or is_work_thread(message)):
+        return
     user_text = message.text.replace("/gpt", "", 1).strip()
     if not user_text:
         await message.reply("Пожалуйста, напиши свой вопрос после команды /gpt")
@@ -82,11 +93,13 @@ async def gpt_answer(message: types.Message):
     except Exception as e:
         await message.reply(f"Ошибка при обращении к AI: {e}")
 
+# --- Общий фоллбек ---
 @dp.message()
 async def fallback(message: types.Message):
-    await message.reply("Если хочешь спросить у GPT, используй /gpt [текст]")
+    if is_private_owner(message) or is_work_thread(message):
+        await message.reply("Если хочешь спросить у GPT, используй /gpt [текст]")
 
-# --- Webhook для Bitrix24 ---
+# --- Webhook для Bitrix24 (пушит задачи в группу/топик) ---
 @app.post("/bitrix-webhook")
 async def bitrix_webhook(request: Request):
     try:
@@ -128,7 +141,7 @@ async def bitrix_webhook(request: Request):
             f'<a href="{link}">Открыть задачу в Битрикс24</a>'
         )
         send_kwargs = dict(
-            chat_id=CHAT_ID,
+            chat_id=GROUP_ID,
             text=message_text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
