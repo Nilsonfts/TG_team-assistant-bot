@@ -1,44 +1,191 @@
-import os
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
-import logging
+Запомни КОД: import os
+import asyncio
+import requests
+from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode
+from fastapi import FastAPI, Request
+from datetime import datetime
+import uvicorn
+import random
+import openai
 
-app = FastAPI()
-
-# Ваши переменные окружения
+# --- Переменные окружения ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", "196614680"))
 CHAT_ID = os.getenv("CHAT_ID")
-# остальные переменные
+THREAD_ID = os.getenv("THREAD_ID")
+BITRIX_WEBHOOK_URL = os.getenv("BITRIX_WEBHOOK_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Настройка логгирования (можно смотреть логи в Railway)
-logging.basicConfig(level=logging.INFO)
+# --- Проверки ---
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN не задан!")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY не задан!")
+if not CHAT_ID:
+    raise RuntimeError("CHAT_ID не задан!")
+if not BITRIX_WEBHOOK_URL:
+    raise RuntimeError("BITRIX_WEBHOOK_URL не задан!")
 
+# --- Инициализация бота/AI/fastapi ---
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+app = FastAPI()
+openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+# --- Карта тегов и фразы ---
+tg_map = {
+    'Кристина Нестерова': '@tinatinulya',
+    'Евгения Мурзина': '@xquerel',
+    'Нил М. ВМ ЕВГ': '@nilfts',
+    'Екатерина Белоногова': '@ek_belonogova',
+    'Олег С. АРТ РВБ СПБ ГРИБ': '@olegstate'
+}
+personalized_phrases = {
+    'Кристина Нестерова': [
+        'держи, ты же у нас любишь всё контролировать 🧐.',
+        'KPI сам себя не выполнит. Приступай.',
+        'тут нужна твоя фирменная строгость.',
+        'входящий таск для специалиста по решению нерешаемого.',
+        'твой аналитический ум нужен здесь и сейчас.'
+    ],
+    'Евгения Мурзина': [
+        'маленькая задача для большого специалиста. ✨',
+        'тебе поручено нести знамя милоты и эффективности.',
+        'маленький гигант большого SMM, твой час настал.',
+        'получен новый таск. Уровень милоты в чате повышен.'
+    ],
+    'Нил М. ВМ ЕВГ': [
+        'маэстро, ваш холст готов. Ждем шедевр. 🎨',
+        'тут нужен твой нестандартный подход. Думай!',
+        'задача требует щепотки безумия. У тебя она есть.',
+        'время для мозгового штурма! Ты штурмуешь, мы ждем.'
+    ],
+    'Екатерина Белоногова': [
+        'Figma плачет, ждет свою королеву. 👑',
+        'нужно сделать красиво. Впрочем, как обычно. 💅',
+        'проект ждет своего героя. И своего дизайнера. Это ты.',
+        'твои макеты ждут обновления!'
+    ],
+    'Олег С. АРТ РВБ СПБ ГРИБ': [
+        'Арт-директор, есть возможность поймать вайб. 🤙',
+        'тут дельце, которое требует твоего фирменного стиля. 😎',
+        'надо сделать по кайфу. Ты знаешь, как. 🌴'
+    ]
+}
+generic_phrases = [
+    'у вас тут новая задачка!',
+    'для тебя обнаружена новая задача!',
+    'тебе выпало новое задание.',
+    'время немного поработать.'
+]
+random_endings = [
+    '☎️ Если не сделаешь — позвоню твоей маме! 🤫',
+    'P.S. Мой кот будет разочарован, если ты провалишь дедлайн. 🐈',
+    'За выполненную в срок задачу — печенька. 🍪 Может быть.',
+    'Да пребудет с тобой сила... и кофеин. ☕'
+]
+
+# --- Забор задачи из Bitrix24 ---
+def get_task_data(task_id):
+    url = f"{BITRIX_WEBHOOK_URL}tasks.task.get?taskId={task_id}"
+    resp = requests.get(url, timeout=10)
+    data = resp.json()
+    return data.get("result", {}).get("task")
+
+# --- Формирование сообщения ---
+def build_message(type_, task):
+    fio = (task.get("responsible", {}).get("name") or '').strip()
+    creator = task.get("creator", {}).get("name", "")
+    creator_id = task.get("creator", {}).get("id", "")
+    tg_tag = tg_map.get(fio, fio)
+    deadline = task.get("deadline")
+    if deadline:
+        try:
+            deadline = datetime.fromisoformat(deadline.replace('Z', '+00:00')).strftime('%d.%m.%Y %H:%M')
+        except Exception:
+            deadline = deadline
+    else:
+        deadline = "не указан"
+    desc = task.get("description") or '-'
+
+    phrase_list = personalized_phrases.get(fio, generic_phrases)
+    random_phrase = random.choice(phrase_list)
+    final_ending = f"\n\n{random.choice(random_endings)}"
+
+    opening_line = f"{tg_tag}, {random_phrase}"
+    core_message = (
+        f"🔢 ID: {task.get('id')}\n"
+        f"🧾 Задача: {task.get('title')}\n"
+        f"📝 Описание: {desc}\n"
+        f"👤 Исполнитель: {fio}\n"
+        f"🧑‍💼 Постановщик: {creator}\n"
+        f"📁 Проект: {task.get('group', {}).get('name', '-')}\n"
+        f"📅 Срок: {deadline}"
+    )
+    message = (
+        f"{opening_line}\n\n"
+        f"{core_message}\n\n"
+        f'<a href="https://nebar.bitrix24.ru/company/personal/user/{creator_id}/tasks/task/view/{task.get("id")}/">ССЫЛКА НА ЗАДАЧУ</a>'
+        f'{final_ending}'
+    )
+    return message
+
+# --- FastAPI: Bitrix24 webhook ---
 @app.post("/bitrix-webhook")
 async def bitrix_webhook(request: Request):
-    # Логируем сырое тело запроса для отладки
-    raw_body = await request.body()
-    logging.info(f"RAW BODY: {raw_body}")
-
+    data = await request.json()
+    task_id = str(data.get("id") or data.get("task_id") or data.get("task", {}).get("id"))
+    type_ = data.get("type") or "new_task"
+    if not task_id or "{{" in task_id:
+        return {"ok": False, "error": "No valid task id"}
     try:
-        data = await request.json()
-    except Exception as e:
-        logging.error(f"Ошибка при парсинге JSON: {e}")
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid JSON: {e}. RAW BODY: {raw_body.decode('utf-8', errors='replace')}"
+        task = get_task_data(task_id)
+        if not task:
+            return {"ok": False, "error": "Task not found"}
+        message = build_message(type_, task)
+        send_kwargs = dict(
+            chat_id=int(CHAT_ID),
+            text=message,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
         )
+        if THREAD_ID:
+            send_kwargs["message_thread_id"] = int(THREAD_ID)
+        asyncio.create_task(bot.send_message(**send_kwargs))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-    # Проверяем, что пришёл ID задачи
-    task_id = data.get("id")
-    if not task_id:
-        return JSONResponse({"ok": False, "error": "No 'id' in request"}, status_code=400)
-    
-    # Здесь ваша логика работы с task_id и отправки сообщения в Telegram
-    # send_to_telegram(chat_id=CHAT_ID, text=...)
+# --- Aiogram: ChatGPT-ответы в личку ---
+@dp.message()
+async def handle_message(message: types.Message):
+    if message.chat.type == "private":
+        user_text = message.text.strip() if message.text else ""
+        if not user_text:
+            await message.reply("Пожалуйста, напиши свой вопрос.")
+            return
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Ты дружелюбный ассистент, отвечай по-русски и понятно."},
+                    {"role": "user", "content": user_text}
+                ],
+                max_tokens=600,
+                temperature=0.9,
+            )
+            answer = response.choices[0].message.content.strip()
+            await message.reply(answer)
+        except Exception as e:
+            await message.reply(f"Ошибка при обращении к AI: {e}")
 
-    # Пример успешного ответа
-    return {"ok": True, "message": f"Task {task_id} processed"}
+# --- Запуск FastAPI и aiogram ---
+async def run_all():
+    asyncio.create_task(dp.start_polling(bot))
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    server = uvicorn.Server(config)
+    await server.serve()
 
-# Можно добавить обработчик для GET (например, тестовый "жив ли сервер")
-@app.get("/bitrix-webhook")
-async def webhook_status():
-    return {"ok": True, "message": "Webhook is alive"}
+if __name__ == "__main__":
+    asyncio.run(run_all())
