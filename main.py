@@ -6,7 +6,6 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from fastapi import FastAPI, Request
 from datetime import datetime
-import uvicorn
 import random
 import openai
 
@@ -199,15 +198,7 @@ async def handle_message(message: types.Message):
         except Exception as e:
             await message.reply(f"Ошибка при обращении к AI: {e}")
 
-# --- Запуск FastAPI и aiogram ---
-async def run_all():
+# --- Запуск aiogram через FastAPI startup event ---
+@app.on_event("startup")
+async def on_startup():
     asyncio.create_task(dp.start_polling(bot))
-    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-    server = uvicorn.Server(config)
-    await server.serve()
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(run_all())
-    except Exception as e:
-        logger.error(f"Ошибка при запуске приложения: {e}")
