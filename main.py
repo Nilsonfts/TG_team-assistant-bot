@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from fastapi import FastAPI, Request
 from datetime import datetime
 import random
-import openai
+from openai import AsyncOpenAI
 
 # --- Logging setup ---
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +36,7 @@ for var_name, value in [
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # --- Карта тегов и фразы ---
 tg_map = {
@@ -184,7 +184,7 @@ async def handle_message(message: types.Message):
             await message.reply("Пожалуйста, напиши свой вопрос.")
             return
         try:
-            response = openai_client.chat.completions.create(
+            response = await openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Ты дружелюбный ассистент, отвечай по-русски и понятно."},
