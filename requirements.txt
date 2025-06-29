@@ -1,6 +1,6 @@
-aiogram==3.5.0
-python-dotenv
-requests
-openai
 fastapi
 uvicorn
+aiogram
+requests
+python-dotenv
+openai>=1.0.0
