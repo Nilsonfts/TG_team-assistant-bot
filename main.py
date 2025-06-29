@@ -8,10 +8,9 @@ from fastapi import FastAPI, Request
 from datetime import datetime
 import random
 from openai import AsyncOpenAI
-from urllib.parse import parse_qs
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main")
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "196614680"))
@@ -33,7 +32,53 @@ for var_name, value in [
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI()
+
+def create_app():
+    app = FastAPI()
+
+    @app.post("/bitrix-webhook")
+    async def bitrix_webhook(request: Request):
+        try:
+            raw_body = await request.body()
+            logger.info(f"RAW BODY: {raw_body}")
+            data = await request.json()
+        except Exception as e:
+            logger.error(f"Ошибка парсинга JSON: {e}")
+            return {"ok": False, "error": f"Invalid JSON: {e}"}
+        task_id = str(data.get("id") or data.get("task_id") or data.get("task", {}).get("id"))
+        type_ = data.get("type") or "new_task"
+        if not task_id or "{{" in task_id:
+            logger.warning("No valid task id")
+            return {"ok": False, "error": "No valid task id"}
+        try:
+            task = get_task_data(task_id)
+            if not task:
+                logger.warning(f"Task not found: {task_id}")
+                return {"ok": False, "error": "Task not found"}
+            message = build_message(type_, task)
+            send_kwargs = dict(
+                chat_id=int(CHAT_ID),
+                text=message,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+            if THREAD_ID:
+                send_kwargs["message_thread_id"] = int(THREAD_ID)
+            asyncio.create_task(bot.send_message(**send_kwargs))
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"Ошибка при обработке webhook: {e}")
+            return {"ok": False, "error": str(e)}
+
+    @app.get("/")
+    async def root():
+        return {"ok": True}
+
+    @app.on_event("startup")
+    async def on_startup():
+        asyncio.create_task(dp.start_polling(bot))
+
+    return app
 
 # --- вспомогательные функции ---
 def get_task_data(task_id):
@@ -134,48 +179,7 @@ def build_message(type_, task):
     )
     return message
 
-# --- основной обработчик ---
-@app.post("/bitrix-webhook")
-async def bitrix_webhook(request: Request):
-    try:
-        content_type = request.headers.get("content-type", "")
-        if content_type.startswith("application/json"):
-            data = await request.json()
-        else:
-            # Bitrix24 шлёт form-urlencoded — разбираем сами
-            raw_body = await request.body()
-            form = parse_qs(raw_body.decode())
-            data = {k: v[0] for k, v in form.items()}
-        logger.info(f"BITRIX24 DATA: {data}")
-    except Exception as e:
-        logger.error(f"Ошибка парсинга тела: {e}")
-        return {"ok": False, "error": f"Invalid body: {e}"}
-
-    # task_id теперь вытаскиваем надёжно:
-    task_id = data.get("id") or data.get("task_id") or data.get("document_id[2]")
-    if not task_id:
-        logger.error("Не удалось найти task_id!")
-        return {"ok": False, "error": "No task id found!"}
-
-    # Получаем задачу из Bitrix24 и шлём в Telegram
-    task = get_task_data(task_id)
-    if not task:
-        logger.error(f"Task not found: {task_id}")
-        return {"ok": False, "error": "Task not found"}
-
-    message = build_message(data.get("type", "new_task"), task)
-    send_kwargs = dict(
-        chat_id=int(CHAT_ID),
-        text=message,
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
-    if THREAD_ID:
-        send_kwargs["message_thread_id"] = int(THREAD_ID)
-    asyncio.create_task(bot.send_message(**send_kwargs))
-    return {"ok": True}
-
-# --- gpt-бот в личку ---
+# --- Aiogram: ChatGPT-ответы в личку ---
 @dp.message()
 async def handle_message(message: types.Message):
     if message.chat.type == "private":
@@ -198,16 +202,5 @@ async def handle_message(message: types.Message):
         except Exception as e:
             await message.reply(f"Ошибка при обращении к AI: {e}")
 
-# --- автозапуск aiogram + FastAPI ---
-@app.on_event("startup")
-async def on_startup():
-    asyncio.create_task(dp.start_polling(bot))
-
-@app.get("/")
-async def root():
-    return {"ok": True}
-
-# Если надо запускать отдельно:
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
+# --- Экспорт FastAPI APP ---
+app = create_app()
