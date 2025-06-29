@@ -81,7 +81,7 @@ def create_app():
 
     return app
 
-# --- вспомогательные функции (сохрани как есть) ---
+# --- вспомогательные функции ---
 def get_task_data(task_id):
     url = f"{BITRIX_WEBHOOK_URL}tasks.task.get?taskId={task_id}"
     try:
@@ -205,3 +205,7 @@ async def handle_message(message: types.Message):
 
 # --- Экспорт FastAPI APP ---
 app = create_app()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
