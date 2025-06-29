@@ -1,5 +1,6 @@
-Запомни КОД: import os
+import os
 import asyncio
+import logging
 import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
@@ -8,6 +9,10 @@ from datetime import datetime
 import uvicorn
 import random
 import openai
+
+# --- Logging setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Переменные окружения ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,14 +23,15 @@ BITRIX_WEBHOOK_URL = os.getenv("BITRIX_WEBHOOK_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Проверки ---
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN не задан!")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY не задан!")
-if not CHAT_ID:
-    raise RuntimeError("CHAT_ID не задан!")
-if not BITRIX_WEBHOOK_URL:
-    raise RuntimeError("BITRIX_WEBHOOK_URL не задан!")
+for var_name, value in [
+    ("BOT_TOKEN", BOT_TOKEN),
+    ("OPENAI_API_KEY", OPENAI_API_KEY),
+    ("CHAT_ID", CHAT_ID),
+    ("BITRIX_WEBHOOK_URL", BITRIX_WEBHOOK_URL)
+]:
+    if not value:
+        logger.error(f"{var_name} не задан!")
+        raise RuntimeError(f"{var_name} не задан!")
 
 # --- Инициализация бота/AI/fastapi ---
 bot = Bot(token=BOT_TOKEN)
@@ -89,9 +95,13 @@ random_endings = [
 # --- Забор задачи из Bitrix24 ---
 def get_task_data(task_id):
     url = f"{BITRIX_WEBHOOK_URL}tasks.task.get?taskId={task_id}"
-    resp = requests.get(url, timeout=10)
-    data = resp.json()
-    return data.get("result", {}).get("task")
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        return data.get("result", {}).get("task")
+    except Exception as e:
+        logger.error(f"Ошибка при получении задачи из Bitrix24: {e}")
+        return None
 
 # --- Формирование сообщения ---
 def build_message(type_, task):
@@ -134,14 +144,22 @@ def build_message(type_, task):
 # --- FastAPI: Bitrix24 webhook ---
 @app.post("/bitrix-webhook")
 async def bitrix_webhook(request: Request):
-    data = await request.json()
+    try:
+        raw_body = await request.body()
+        logger.info(f"RAW BODY: {raw_body}")
+        data = await request.json()
+    except Exception as e:
+        logger.error(f"Ошибка парсинга JSON: {e}")
+        return {"ok": False, "error": f"Invalid JSON: {e}"}
     task_id = str(data.get("id") or data.get("task_id") or data.get("task", {}).get("id"))
     type_ = data.get("type") or "new_task"
     if not task_id or "{{" in task_id:
+        logger.warning("No valid task id")
         return {"ok": False, "error": "No valid task id"}
     try:
         task = get_task_data(task_id)
         if not task:
+            logger.warning(f"Task not found: {task_id}")
             return {"ok": False, "error": "Task not found"}
         message = build_message(type_, task)
         send_kwargs = dict(
@@ -155,6 +173,7 @@ async def bitrix_webhook(request: Request):
         asyncio.create_task(bot.send_message(**send_kwargs))
         return {"ok": True}
     except Exception as e:
+        logger.error(f"Ошибка при обработке webhook: {e}")
         return {"ok": False, "error": str(e)}
 
 # --- Aiogram: ChatGPT-ответы в личку ---
@@ -183,9 +202,12 @@ async def handle_message(message: types.Message):
 # --- Запуск FastAPI и aiogram ---
 async def run_all():
     asyncio.create_task(dp.start_polling(bot))
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
     server = uvicorn.Server(config)
     await server.serve()
 
 if __name__ == "__main__":
-    asyncio.run(run_all())
+    try:
+        asyncio.run(run_all())
+    except Exception as e:
+        logger.error(f"Ошибка при запуске приложения: {e}")
